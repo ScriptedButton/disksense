@@ -1,4 +1,3 @@
-use disk_list;
 use dunce::canonicalize;
 use fs_extra::dir::get_size;
 use log::error;
@@ -8,6 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use sysinfo::{Components, Disks, Networks, System};
 use tauri::command;
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
 use tauri::{AppHandle, Emitter, Listener, Manager};
@@ -534,30 +534,6 @@ fn estimate_item_count(path: &Path, max_depth: usize) -> usize {
     count
 }
 
-#[command]
-async fn get_drive_info() -> Result<Vec<DriveInfo>, String> {
-    let disks = disk_list::get_disk_list();
-
-    let mut drives = Vec::new();
-
-    for disk in disks {
-        // Skip disks with zero total space
-        if disk.total_space == 0 {
-            continue;
-        }
-
-        drives.push(DriveInfo {
-            name: disk.name.unwrap_or_else(|| "Unknown Drive".to_string()),
-            mount_point: disk.mount_point.to_string_lossy().to_string(),
-            total_space: disk.total_space,
-            available_space: disk.available_space,
-            used_space: disk.total_space.saturating_sub(disk.available_space),
-        });
-    }
-
-    Ok(drives)
-}
-
 #[derive(Debug, Serialize)]
 pub struct DriveInfo {
     name: String,
@@ -565,6 +541,24 @@ pub struct DriveInfo {
     total_space: u64,
     available_space: u64,
     used_space: u64,
+}
+
+#[command]
+async fn get_drive_info() -> Result<Vec<DriveInfo>, String> {
+    let mut drives = Disks::new_with_refreshed_list();
+    let mut drive_infos = Vec::new();
+
+    for disk in drives.iter() {
+        drive_infos.push(DriveInfo {
+            name: disk.name().to_string_lossy().to_string(),
+            mount_point: disk.mount_point().to_string_lossy().to_string(),
+            total_space: disk.total_space(),
+            available_space: disk.available_space(),
+            used_space: disk.total_space() - disk.available_space(),
+        });
+    }
+
+    Ok(drive_infos)
 }
 
 #[command]

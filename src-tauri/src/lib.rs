@@ -1,3 +1,4 @@
+use disk_list;
 use dunce::canonicalize;
 use fs_extra::dir::get_size;
 use log::error;
@@ -8,11 +9,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::command;
-use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri::menu::{Menu, MenuBuilder, MenuItemBuilder};
-use walkdir::WalkDir;
+use tauri::{AppHandle, Emitter, Listener, Manager};
 use tauri_plugin_fs;
 use tauri_plugin_opener;
+use walkdir::WalkDir;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct DiskItem {
@@ -62,7 +63,7 @@ async fn scan_directory(
         fast_mode: true,
         skip_hidden: true,
     });
-    
+
     let path = Path::new(&path);
 
     if !path.exists() {
@@ -82,7 +83,7 @@ async fn scan_directory(
     // Create progress tracking
     let processed_items = Arc::new(AtomicUsize::new(0));
     let total_items = estimate_item_count(&canonical_path, max_depth);
-    
+
     // Initial progress report
     emit_progress(
         &app,
@@ -121,12 +122,7 @@ async fn scan_directory(
 }
 
 // Helper function to emit progress updates
-fn emit_progress(
-    app: &tauri::AppHandle,
-    path: &Path,
-    processed: usize,
-    total: usize,
-) {
+fn emit_progress(app: &tauri::AppHandle, path: &Path, processed: usize, total: usize) {
     let percent = if total > 0 {
         (processed as f32 / total as f32) * 100.0
     } else {
@@ -173,22 +169,22 @@ fn fast_scan(
             .filter_map(|entry| {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                
+
                 // Skip hidden files if configured
                 if options.skip_hidden && name.starts_with(".") {
                     return None;
                 }
-                
+
                 if path.is_file() {
                     // Update progress
                     let current = processed_items.fetch_add(1, Ordering::SeqCst) + 1;
                     if current % 100 == 0 || current < 100 {
                         emit_progress(app, &path, current, total_items);
                     }
-                    
+
                     // Get file size
                     let size = entry.metadata().map(|m| m.len()).unwrap_or(0);
-                    
+
                     Some(DiskItem {
                         name,
                         path: path.to_string_lossy().to_string(),
@@ -226,21 +222,21 @@ fn fast_scan(
                     .filter_map(|entry| {
                         let path = entry.path();
                         let name = entry.file_name().to_string_lossy().to_string();
-                        
+
                         // Skip hidden directories if configured
                         if options.skip_hidden && name.starts_with(".") {
                             return None;
                         }
-                        
+
                         // Update progress
                         let current = processed_items.fetch_add(1, Ordering::SeqCst) + 1;
                         if current % 20 == 0 || current < 100 {
                             emit_progress(app, &path, current, total_items);
                         }
-                        
+
                         // For large directories with many files, we might skip full scan in fast mode
                         let skip_full_scan = options.fast_mode && is_large_directory(&path);
-                        
+
                         if skip_full_scan && max_depth > 1 {
                             // For large directories, just estimate size rather than scan fully
                             let size = estimate_dir_size(&path);
@@ -275,21 +271,21 @@ fn fast_scan(
             for entry in dirs {
                 let path = entry.path();
                 let name = entry.file_name().to_string_lossy().to_string();
-                
+
                 // Skip hidden directories if configured
                 if options.skip_hidden && name.starts_with(".") {
                     continue;
                 }
-                
+
                 // Update progress
                 let current = processed_items.fetch_add(1, Ordering::SeqCst) + 1;
                 if current % 20 == 0 || current < 100 {
                     emit_progress(app, &path, current, total_items);
                 }
-                
+
                 // Estimate size without recursing
                 let size = estimate_dir_size(&path);
-                
+
                 children.push(DiskItem {
                     name,
                     path: path.to_string_lossy().to_string(),
@@ -302,7 +298,7 @@ fn fast_scan(
 
         // Sort children by size (largest first)
         children.sort_by(|a, b| b.size.cmp(&a.size));
-        
+
         // Set children and calculate root size as sum of children
         root.children = Some(children);
         if let Some(children) = &root.children {
@@ -337,12 +333,12 @@ fn estimate_dir_size(path: &Path) -> u64 {
             return size;
         }
     }
-    
+
     // Sample-based estimation for large directories
     let mut size = 0;
     let mut count = 0;
     let mut sample_count = 0;
-    
+
     if let Ok(entries) = std::fs::read_dir(path) {
         // First pass: count entries and take size samples
         for entry_result in entries.take(100) {
@@ -355,14 +351,14 @@ fn estimate_dir_size(path: &Path) -> u64 {
             }
         }
     }
-    
+
     // Try to count all entries but limit to prevent slow performance
     let total_count = if let Ok(entries) = std::fs::read_dir(path) {
         entries.count().min(10000)
     } else {
         count
     };
-    
+
     // If we have samples, extrapolate total size
     if sample_count > 0 && total_count > sample_count {
         let avg_size = size as f64 / sample_count as f64;
@@ -383,13 +379,16 @@ fn comprehensive_scan(
     options: &ScanOptions,
 ) -> DiskItem {
     let path_str = dir_path.to_string_lossy().to_lowercase();
-    
+
     // Skip certain system directories that typically cause "Access denied" errors
     #[cfg(target_os = "windows")]
     for skip_dir in &SKIP_DIRS {
         if path_str.starts_with(skip_dir) {
             return DiskItem {
-                name: format!("{} (access denied)", dir_path.file_name().unwrap_or_default().to_string_lossy()),
+                name: format!(
+                    "{} (access denied)",
+                    dir_path.file_name().unwrap_or_default().to_string_lossy()
+                ),
                 path: dir_path.to_string_lossy().to_string(),
                 size: 0,
                 is_dir: true,
@@ -397,7 +396,7 @@ fn comprehensive_scan(
             };
         }
     }
-    
+
     let mut root = DiskItem {
         name: dir_path
             .file_name()
@@ -408,21 +407,21 @@ fn comprehensive_scan(
         is_dir: true,
         children: Some(Vec::new()),
     };
-    
+
     // Update progress
     let current = processed_items.fetch_add(1, Ordering::SeqCst) + 1;
     if current % 20 == 0 || current < 100 {
         emit_progress(app, dir_path, current, total_items);
     }
-    
+
     // Create a walkdir iterator with error handling
     let walker = WalkDir::new(dir_path)
         .min_depth(1)
         .max_depth(1)
         .follow_links(false);
-    
+
     let mut children = Vec::new();
-    
+
     for entry_result in walker {
         let entry = match entry_result {
             Ok(entry) => entry,
@@ -436,16 +435,16 @@ fn comprehensive_scan(
                 continue;
             }
         };
-        
+
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
         let is_dir = entry.file_type().is_dir();
-        
+
         // Skip hidden files/dirs if configured
         if options.skip_hidden && name.starts_with(".") {
             continue;
         }
-        
+
         let size = if is_dir {
             // For directories, calculate size based on accurate method for comprehensive scan
             match get_size(path) {
@@ -461,7 +460,7 @@ fn comprehensive_scan(
                 Err(_) => 0,
             }
         };
-        
+
         let mut child = DiskItem {
             name,
             path: path.to_string_lossy().to_string(),
@@ -469,30 +468,37 @@ fn comprehensive_scan(
             is_dir,
             children: if is_dir { Some(Vec::new()) } else { None },
         };
-        
+
         // Update progress for this entry
         let current = processed_items.fetch_add(1, Ordering::SeqCst) + 1;
         if current % 20 == 0 || current < 100 {
             emit_progress(app, path, current, total_items);
         }
-        
+
         if is_dir && max_depth > 0 {
             // Recursively scan subdirectory
-            child = comprehensive_scan(path, max_depth - 1, app, processed_items, total_items, options);
+            child = comprehensive_scan(
+                path,
+                max_depth - 1,
+                app,
+                processed_items,
+                total_items,
+                options,
+            );
         }
-        
+
         children.push(child);
     }
-    
+
     // Sort children by size (largest first)
     children.sort_by(|a, b| b.size.cmp(&a.size));
-    
+
     // Set children and calculate root size as sum of children
     if !children.is_empty() {
         root.size = children.iter().map(|child| child.size).sum();
         root.children = Some(children);
     }
-    
+
     root
 }
 
@@ -501,20 +507,20 @@ fn estimate_item_count(path: &Path, max_depth: usize) -> usize {
     if !path.is_dir() {
         return 1;
     }
-    
+
     // For large directories, limit the estimation to avoid slowdowns
     if is_large_directory(path) {
         return 5000; // Just use a reasonable estimate
     }
-    
+
     let mut count = 1; // Count the directory itself
-    
+
     // Only count immediate children for estimation to avoid too much overhead
     if let Ok(entries) = path.read_dir() {
         for entry_result in entries {
             if let Ok(entry) = entry_result {
                 count += 1;
-                
+
                 // Only recurse for a limited depth to keep estimation fast
                 if max_depth > 0 && entry.path().is_dir() {
                     // Avoid estimating too deeply to keep it responsive
@@ -524,20 +530,32 @@ fn estimate_item_count(path: &Path, max_depth: usize) -> usize {
             }
         }
     }
-    
+
     count
 }
 
 #[command]
 async fn get_drive_info() -> Result<Vec<DriveInfo>, String> {
-    #[cfg(target_os = "windows")]
-    {
-        get_windows_drives()
+    let disks = disk_list::get_disk_list();
+
+    let mut drives = Vec::new();
+
+    for disk in disks {
+        // Skip disks with zero total space
+        if disk.total_space == 0 {
+            continue;
+        }
+
+        drives.push(DriveInfo {
+            name: disk.name.unwrap_or_else(|| "Unknown Drive".to_string()),
+            mount_point: disk.mount_point.to_string_lossy().to_string(),
+            total_space: disk.total_space,
+            available_space: disk.available_space,
+            used_space: disk.total_space.saturating_sub(disk.available_space),
+        });
     }
-    #[cfg(not(target_os = "windows"))]
-    {
-        get_unix_drives()
-    }
+
+    Ok(drives)
 }
 
 #[derive(Debug, Serialize)]
@@ -549,158 +567,60 @@ pub struct DriveInfo {
     used_space: u64,
 }
 
-#[cfg(target_os = "windows")]
-fn get_windows_drives() -> Result<Vec<DriveInfo>, String> {
-    use std::ffi::OsString;
-    use std::fs;
-    use std::os::windows::ffi::OsStrExt;
-    use std::os::windows::prelude::OsStringExt;
-    use winapi::shared::minwindef::DWORD;
-    use winapi::um::fileapi::GetDiskFreeSpaceExW;
-    use winapi::um::winnt::ULARGE_INTEGER;
-    
-    let mut drives = Vec::new();
-    
-    for drive in 'A'..='Z' {
-        let drive_path = format!("{}:\\", drive);
-        let path = Path::new(&drive_path);
-        
-        if path.exists() {
-            if let Ok(metadata) = fs::metadata(path) {
-                // Skip CD-ROM drives and other special drives
-                if metadata.file_type().is_file() {
-                    continue;
-                }
-
-                // Convert path to wide string (UTF-16)
-                let wide_path: Vec<u16> = path
-                    .as_os_str()
-                    .encode_wide()
-                    .chain(std::iter::once(0))
-                    .collect();
-
-                let mut available_bytes = 0u64;
-                let mut total_bytes = 0u64;
-                let mut free_bytes = 0u64;
-
-                // Call Windows API
-                let result = unsafe {
-                    GetDiskFreeSpaceExW(
-                        wide_path.as_ptr(),
-                        &mut available_bytes as *mut u64 as *mut ULARGE_INTEGER,
-                        &mut total_bytes as *mut u64 as *mut ULARGE_INTEGER,
-                        &mut free_bytes as *mut u64 as *mut ULARGE_INTEGER,
-                    )
-                };
-
-                if result != 0 {
-                    let used_space = total_bytes.saturating_sub(available_bytes);
-
-                    if total_bytes > 0 {
-                        drives.push(DriveInfo {
-                            name: format!("Drive {}", drive),
-                            mount_point: drive_path,
-                            total_space: total_bytes,
-                            available_space: available_bytes,
-                            used_space,
-                        });
-                    }
-                }
-            }
-        }
-    }
-    
-    Ok(drives)
-}
-
-#[cfg(not(target_os = "windows"))]
-fn get_unix_drives() -> Result<Vec<DriveInfo>, String> {
-    use std::fs;
-    use std::process::Command;
-    
-    let mut drives = Vec::new();
-    
-    let output = Command::new("df")
-        .arg("-k")
-        .output()
-        .map_err(|e| format!("Failed to execute df: {}", e))?;
-    
-    let output_str = String::from_utf8_lossy(&output.stdout);
-    
-    for line in output_str.lines().skip(1) {
-        let parts: Vec<&str> = line.split_whitespace().collect();
-        if parts.len() < 6 {
-            continue;
-        }
-        
-        let device = parts[0];
-        let mount_point = parts[5];
-        let path = Path::new(mount_point);
-        
-        if let Ok(total_space) = fs::metadata(path).map(|m| m.len()) {
-            let available_space = parts[3].parse::<u64>().unwrap_or(0) * 1024;
-            let used_space = parts[2].parse::<u64>().unwrap_or(0) * 1024;
-            
-            drives.push(DriveInfo {
-                name: device.to_string(),
-                mount_point: mount_point.to_string(),
-                total_space,
-                available_space,
-                used_space,
-            });
-        }
-    }
-    
-    Ok(drives)
-}
-
 #[command]
 async fn show_file_context_menu(
     app: AppHandle,
     path: String,
     file_name: String,
     is_dir: bool,
-    window_label: String
+    window_label: String,
 ) -> Result<(), String> {
-    let window = app.get_webview_window(&window_label)
+    let window = app
+        .get_webview_window(&window_label)
         .ok_or_else(|| "Window not found".to_string())?;
-    
+
     // Create menu items
-    let open_item = MenuItemBuilder::with_id("open", format!("Open {}", if is_dir { "Folder" } else { "File" }))
-        .build(&app)
-        .map_err(|e| format!("Failed to build menu: {}", e))?;
-    
-    let delete_item = MenuItemBuilder::with_id("delete", format!("Delete {}", if is_dir { "Folder" } else { "File" }))
-        .build(&app)
-        .map_err(|e| format!("Failed to build menu: {}", e))?;
-    
+    let open_item = MenuItemBuilder::with_id(
+        "open",
+        format!("Open {}", if is_dir { "Folder" } else { "File" }),
+    )
+    .build(&app)
+    .map_err(|e| format!("Failed to build menu: {}", e))?;
+
+    let delete_item = MenuItemBuilder::with_id(
+        "delete",
+        format!("Delete {}", if is_dir { "Folder" } else { "File" }),
+    )
+    .build(&app)
+    .map_err(|e| format!("Failed to build menu: {}", e))?;
+
     let properties_item = MenuItemBuilder::with_id("properties", "Properties")
         .build(&app)
         .map_err(|e| format!("Failed to build menu: {}", e))?;
-    
+
     // Build the menu
     let menu = MenuBuilder::new(&app)
         .items(&[&open_item, &delete_item, &properties_item])
         .build()
         .map_err(|e| format!("Failed to build menu: {}", e))?;
-    
+
     // Clone path to use in the closure
     let path_clone = path.clone();
-    
+
     // Clone app to avoid borrowing issues
     let app_clone = app.clone();
-    
+
     // Register event handler before showing menu
     app.once("menu-event", move |event| {
         let menu_id = event.payload();
         match menu_id {
             "open" => {
                 let _ = tauri_plugin_opener::open_path(path_clone.clone(), None::<&str>);
-            },
+            }
             "delete" => {
                 // Deletion will be handled by front-end after confirmation
                 let _ = app_clone.emit("delete-requested", path_clone.clone());
-            },
+            }
             "properties" => {
                 #[cfg(target_os = "windows")]
                 {
@@ -709,15 +629,18 @@ async fn show_file_context_menu(
                         .args(&["/C", "explorer", "/select,", &path_clone])
                         .spawn();
                 }
-                
+
                 #[cfg(not(target_os = "windows"))]
                 {
                     // For other platforms, just open the containing folder as a fallback
                     if let Some(parent) = Path::new(&path_clone).parent() {
-                        let _ = tauri_plugin_opener::open_path(parent.to_string_lossy().to_string(), None::<&str>);
+                        let _ = tauri_plugin_opener::open_path(
+                            parent.to_string_lossy().to_string(),
+                            None::<&str>,
+                        );
                     }
                 }
-            },
+            }
             _ => {}
         }
     });
@@ -727,25 +650,25 @@ async fn show_file_context_menu(
 
 #[command]
 async fn open_path(path: String) -> Result<(), String> {
-    match tauri_plugin_opener::open_path(path,  None::<&str>) {
+    match tauri_plugin_opener::open_path(path, None::<&str>) {
         Ok(_) => Ok(()),
-        Err(e) => Err(format!("Failed to open path: {}", e))
+        Err(e) => Err(format!("Failed to open path: {}", e)),
     }
 }
 
 #[command]
 async fn delete_path(path: String) -> Result<(), String> {
     let path = Path::new(&path);
-    
+
     if path.is_dir() {
         match std::fs::remove_dir_all(path) {
             Ok(_) => Ok(()),
-            Err(e) => Err(format!("Failed to delete directory: {}", e))
+            Err(e) => Err(format!("Failed to delete directory: {}", e)),
         }
     } else {
         match std::fs::remove_file(path) {
             Ok(_) => Ok(()),
-            Err(e) => Err(format!("Failed to delete file: {}", e))
+            Err(e) => Err(format!("Failed to delete file: {}", e)),
         }
     }
 }
@@ -753,6 +676,7 @@ async fn delete_path(path: String) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

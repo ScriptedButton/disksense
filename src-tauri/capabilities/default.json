@@ -8,8 +8,12 @@
     "opener:default",
     "fs:default",
     "fs:read-all",
+    "fs:write-all",
     "fs:deny-seek",
     "fs:allow-stat",
-    "fs:allow-size"
+    "fs:allow-size",
+    "shell:default",
+    "shell:allow-execute",
+    "shell:allow-open"
   ]
 }
